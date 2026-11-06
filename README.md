@@ -8,88 +8,111 @@
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
-  <img alt="Last commit" src="https://img.shields.io/github/last-commit/ISS-Mimic/Mimic">
+  <img alt="Last commit" src="https://img.shields.io/github/last-commit/SINtyanneru/ISS-Mimic">
   <a href="https://discord.gg/zPKyE6hBSe"><img alt="Discord Chat" src="https://img.shields.io/discord/764217406041882684"></a>
   <a href="https://www.youtube.com/watch?v=W9iZBjzOEEQ"><img alt="Demo" src="https://img.shields.io/badge/▶ Demo%20Video-red?logo=youtube&logoColor=white"></a>
 </p>
 
-> **ISS Mimic** is an open-source mash-up of hardware + software that **mirrors the International Space Station’s solar-array and radiator motion** in real time.  
-> Runs on Raspberry Pi • 12 motors drive a 3-D printed ISS • Live telemetry visualizer
+> **ISS Mimic** は、国際宇宙ステーション（ISS）の太陽電池パドルとラジエーターの動きをリアルタイムに再現する、ハードウェア＋ソフトウェアのオープンソースプロジェクトです。
+> Raspberry Pi で動作 • 12個のモーターで3Dプリント製ISSを駆動 • ライブテレメトリ表示
 
 ---
 
-ISS Mimic is a 3D printed model of the International Space Station that connects to the actual live data from the real ISS to control a model that rotates solar panels and radiators to match the real one in real time. The goal of this project is to connect people with the ISS. There are three different mimic models: Mimic, Mini Mimic, and Edu Mimic. These models are designed for teachers, students, museums, hobbyists, and anyone who wants to learn more about the ISS. 
+## このリポジトリについて（フォーク）
 
-Join the discussion, help out, ask for help, chat about the ISS here: [Mimic Discord](https://discord.gg/zPKyE6hBSe)
+このリポジトリは、本家 **[ISS-Mimic/Mimic](https://github.com/ISS-Mimic/Mimic)** のフォークです。
+
+ISS Mimic という素晴らしいプロジェクトを生み出し、長年育ててきた本家の開発チームとコミュニティに、心から敬意と感謝を表します。このフォークの内容のほぼすべては本家の成果物であり、本家なくして存在しません。プロジェクトの最新情報・正規のドキュメント・コミュニティへの参加は、ぜひ本家をご覧ください。
+
+- 本家リポジトリ: https://github.com/ISS-Mimic/Mimic
+- 本家 Wiki: https://github.com/ISS-Mimic/Mimic/wiki
+- 本家 Discord: [Mimic Discord](https://discord.gg/zPKyE6hBSe)
+
+### このフォークでの変更点
+
+本家への変更は最小限に絞り、以下の2点だけを加えています。
+
+1. **README の日本語化**（このファイル）
+2. **テレメトリの MySQL 保存対応**（`Pi/iss_telemetry.py`）
+   - 既定では従来どおりローカル SQLite に保存します
+   - `Pi/config.ini` の `[mysql]` セクションで `enabled = true` にすると、受信したテレメトリを MySQL の `telemetry` テーブルに保存します（テーブルは初回起動時に自動作成）
+
+---
+
+ISS Mimic は、実際のISSのライブデータに接続し、太陽電池パドルやラジエーターを本物と同期して回転させる、3Dプリント製の国際宇宙ステーション模型です。目標は、人々とISSをつなぐこと。モデルには Mimic、Mini Mimic、Edu Mimic の3種類があり、教師・学生・博物館・ホビイストなど、ISSについて学びたいすべての人のために設計されています。
+
+議論への参加、協力の申し出、助けを求める場、ISSについての雑談はこちら: [Mimic Discord](https://discord.gg/zPKyE6hBSe)（本家のDiscordです）
 
 ![PXL_20231210_003701830](https://github.com/user-attachments/assets/27b69560-8007-48d9-a087-6f27fd00f06d)
 
 <details>
-<summary>Table of Contents</summary>
+<summary>目次</summary>
 
-- [Features](#features)
-- [Quick Start (Raspberry Pi)](#quick-start-raspberry-pi)
-- [Project Architecture](#project-architecture)
-- [Build Your Own Model](#build-your-own-model)
-- [Screenshots](#screenshots)
-- [Contributing](#contributing)
-- [Roadmap](#roadmap)
-- [License](#license)
+- [特徴](#特徴)
+- [クイックスタート（Raspberry Pi）](#クイックスタートraspberry-pi)
+- [テレメトリについて](#テレメトリについて)
+- [プロジェクト構成](#プロジェクト構成)
+- [自分でモデルを作る](#自分でモデルを作る)
+- [スクリーンショット](#スクリーンショット)
+- [コントリビュート](#コントリビュート)
+- [ロードマップ](#ロードマップ)
+- [謝辞](#謝辞)
+- [ライセンス](#ライセンス)
 </details>
 
 ---
 
-### Features
-- **Live telemetry pull** from NASA’s Lightstreamer endpoint – no scraping needed  
-- **Interactive dashboards** (more capable than the original ISSLive site)  
-- **Real-time kinematics**: 12-axis motion matches α- and β-gimbal joint angles  
-- **Modular design**: Separate Pi (telemetry & UI) ↔ Arduino (motor control)  
-- **Low- / High-fidelity STLs** you can print today  
+### 特徴
+- **ライブテレメトリ取得**: NASA の Lightstreamer エンドポイントから取得。スクレイピング不要
+- **インタラクティブなダッシュボード**（当時の ISSLive サイトを超える機能）
+- **リアルタイムなキネマティクス**: 12軸の動きが α・β ジンバルの関節角に一致
+- **モジュール設計**: Pi（テレメトリ＆UI）↔ Arduino（モーター制御）を分離
+- **低／高精細の STL** を今すぐ印刷可能
 
-### Quick Start (Raspberry Pi)
+### クイックスタート（Raspberry Pi）
 ```bash
-# 1. Clone & install deps
-  git clone --depth 1 https://github.com/ISS-Mimic/Mimic.git/ 
-  cd ~/Mimic
+# 1. クローン＆依存関係のインストール
+  git clone --depth 1 https://github.com/SINtyanneru/ISS-Mimic.git/
+  cd ~/ISS-Mimic
   python setup.py
 
-# 2. Run the Mimic GUI dashboard
-  cd ~/Mimic/Pi/
+# 2. Mimic GUI ダッシュボードを起動
+  cd ~/ISS-Mimic/Pi/
   python GUI.py
 ```
-Full software guide: [Wiki » Software Setup Instructions](https://github.com/ISS-Mimic/Mimic/wiki/Build-Instruction%3A-Mimic-Software-Setup-Instructions).
+ソフトウェアの完全なガイド: [Wiki » Software Setup Instructions](https://github.com/ISS-Mimic/Mimic/wiki/Build-Instruction%3A-Mimic-Software-Setup-Instructions)（本家Wiki、英語）
 
-### Telemetry
-Telemetry is data remotely collected from the ISS and transmitted to the ISS Mission Control Centers for monitoring the operational status of ISS systems. 
+### テレメトリについて
+テレメトリとは、ISS の各システムの運用状態を監視するために、ISS から収集され、ISS管制センターへ送信されるデータのことです。
 
-In 2011 some incredible JSC employees released a subset of the 100,000+ ISS telemetry items to the public under the ISSlive! project and an associated website.
-Sadly, that website is no longer running, but they opened the door for dozens of projects to follow in their footsteps. 
+2011年、JSC（ジョンソン宇宙センター）の素晴らしいスタッフの方々が、10万項目以上あるISSテレメトリの一部を、ISSlive! プロジェクトとそのウェブサイトを通じて一般公開しました。
+残念ながらそのウェブサイトはすでに終了していますが、彼らが開いた扉のおかげで、その後に続く何十ものプロジェクトが生まれました。
 
-NASA contracted the wonderful folks at [Lightstreamer](https://lightstreamer.com/) to provide this subset of ISS telemetry out to the public and that is the source of all the public telemetry projects today. 
+NASA は [Lightstreamer](https://lightstreamer.com/) 社と契約し、このISSテレメトリの一部を一般へ配信しています。これが、今日のすべての公開テレメトリプロジェクトの源になっています。
 
-We have made three telemetry pages to show off all of the public data (as well as our Pi application screens).
+本家では、公開データのすべて（と Pi アプリの画面）を紹介するテレメトリページを3つ用意しています。
 
-A filterable table here: https://iss-mimic.github.io/Mimic/ (and in Russian: https://iss-mimic.github.io/Mimic/index_ru.html)
-and a great dashboard here: https://iss-mimic.github.io/Mimic/dashboard.html
+フィルタ可能なテーブル: https://iss-mimic.github.io/Mimic/ （ロシア語版: https://iss-mimic.github.io/Mimic/index_ru.html ）
+優れたダッシュボード: https://iss-mimic.github.io/Mimic/dashboard.html
 
-### Project Architecture
+### プロジェクト構成
 ```text
 ┌──────────┐              ┌──────────────┐                ┌──────────────┐                 ┌──────────┐
 │ NASA LS  │────────────▶│ Raspberry Pi │───────────────▶│  Arduino(s)  │───────────────▶│  Motors  │
 └──────────┘  telemetry   └──────────────┘  joint angles  └──────────────┘  motor commands └──────────┘
 ```
-*Pi side* (Python + Kivy) shows telemetry dashboards and forwards joint targets.  
-*Arduino side* (C++) drives stepper/servo motors in the 3-D-printed truss.
+*Pi 側*（Python + Kivy）はテレメトリダッシュボードを表示し、関節の目標角を送ります。
+*Arduino 側*（C++）は、3Dプリント製トラス内のステッピング／サーボモーターを駆動します。
 
-### Build Your Own Model
-| Fidelity | STL pack | Status |
+### 自分でモデルを作る
+| 精細度 | STL パック | 状態 |
 |----------|----------|--------|
-| Low      | [`/3D_Printing`](3D_Printing) | ✔ Complete |
-| High     | `/3D_Printing/high_fidelity` | In progress – contributors welcome! |
+| Low      | [`/3D_Printing`](3D_Printing) | ✔ 完成 |
+| High     | `/3D_Printing/high_fidelity` | 進行中 – コントリビューター歓迎！ |
 
-Mechanical details, BOM, and wiring live in the **[Hardware Wiki section](https://github.com/ISS-Mimic/Mimic/wiki/Hardware)**.
+機構の詳細、BOM、配線は **[ハードウェア Wiki セクション](https://github.com/ISS-Mimic/Mimic/wiki/Hardware)**（本家）にあります。
 
-### Screenshots
+### スクリーンショット
 <p align="center">
   <img src="https://github.com/user-attachments/assets/071d90c0-504c-4c9c-95a2-5e7aa4a1db94" width="250" alt="Mimic1">
   <img src="https://github.com/user-attachments/assets/2579f6cb-1be1-4827-b076-0dc5c3374468" width="250" alt="Mimic2">
@@ -104,25 +127,28 @@ Mechanical details, BOM, and wiring live in the **[Hardware Wiki section](https:
   <img src="https://github.com/user-attachments/assets/5c7bd170-9f16-42e7-be29-4d884cc17b1a" width="250" alt="Mimic9">
 </p>
 
-### Contributing
-Start by opening an issue to suggest am improvement or bug or by chatting on **[Discord](https://discord.gg/zPKyE6hBSe)**.  
-Coding guidelines:
-1. Follow **PEP 8** and keep GUI layout in **`.kv` files** (Kivy best practice).  
-2. Fix all our mistakes. 
+### コントリビュート
+改善案やバグの提案は、本家の Issue を立てるか **[Discord](https://discord.gg/zPKyE6hBSe)** で声をかけてください。
+コーディングガイドライン:
+1. **PEP 8** に従い、GUI レイアウトは **`.kv` ファイル** に置くこと（Kivy のベストプラクティス）。
+2. 私たちのミスは全部直してください。
 
-Other help:
--Feel free to suggest ideas! Best place to talk is out discord, or feel free to publish an issue
+その他の協力も歓迎です:
+- アイデアの提案は自由にどうぞ！ 話すのに最適な場所は本家の Discord です。Issue を公開しても構いません
 
-### Roadmap
-- [ ] Finish high-fidelity CAD & release STEP source
-- [ ] Complete build guide
-- [ ] Finish Kivy telemetry screens  
+### ロードマップ
+- [ ] 高精細 CAD を完成させ、STEP ソースを公開
+- [ ] ビルドガイドを完成
+- [ ] Kivy テレメトリ画面を完成
 
-### License
-This project is licensed under the MIT License – see [`LICENSE`](LICENSE) for details.
+### 謝辞
+このプロジェクトを前進させてきたすべての方々へ。詳しくは [`Credits.txt`](Credits.txt) をご覧ください。とりわけ、このデータを最初に一般公開した JSC の ISSlive チームの皆さま、ISSlive を復旧させた JSC の方々、そして本家 ISS Mimic の開発チームに感謝します。
+
+### ライセンス
+このプロジェクトは MIT License のもとで公開されています。詳細は [`LICENSE`](LICENSE) をご覧ください。本家 ISS Mimic も同じ MIT License です。
 
 <details>
-<summary>The code is ugly and awful but it works *mostly* (click to vent)</summary>
+<summary>コードは酷くてひどいけど、だいたい動きます（愚痴はこちらをクリック）</summary>
 
-We’re hardware engineers moonlighting as coders. Expect caffeine-driven hacks and the occasional refactor fiasco. Contributions and constructive feedback are *super* welcome!
+私たちは本業ハードウェアエンジニアで、片手間にコードを書いています。カフェイン駆動のハックや、時折のリファクタリング騒動にご期待ください。コントリビューションと建設的なフィードバックは大歓迎です！
 </details>
