@@ -198,7 +198,13 @@ class TimeListener(LSSubscriptionListener):
 
 
 def wait_for_input():
-    input("{0:-^80}\n".format("Press enter to disconnect & quit."))
+    try:
+        input("{0:-^80}\n".format("Press enter to disconnect & quit."))
+    except EOFError:
+        # No interactive stdin (e.g. when running as a systemd service):
+        # keep running until the process is stopped.
+        log_info("No interactive stdin; running until stopped.")
+        threading.Event().wait()
 
 def main():
     print('ISS Telemetry script active')
