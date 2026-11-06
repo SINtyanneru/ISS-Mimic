@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 
 from datetime import datetime, timedelta, timezone
+import configparser
+import pathlib
 import sqlite3
+import threading
 import os.path as op #use for getting mimic directory
 from utils.logger import log_info, log_error
 
@@ -14,6 +17,84 @@ mimic_directory = op.abspath(op.join(__file__, op.pardir, op.pardir, op.pardir))
 log_info("Initialized Telemetry Log")
 
 FIVE_SECONDS_AS_HOURS = 5.0 / 3600  # 3600 seconds/hr
+
+CONFIG_PATH = pathlib.Path(__file__).resolve().parent / "config.ini"
+
+
+class MySQLTelemetryDB:
+    """sqlite3.Connection-like wrapper around a PyMySQL connection.
+
+    The listeners issue sqlite-style statements through ``db.execute(sql,
+    params)`` using ``?`` placeholders. This wrapper translates the
+    placeholders to PyMySQL's ``%s`` so the listener code stays unchanged.
+    A lock serializes access because PyMySQL connections are not safe to
+    share between the Lightstreamer callback threads.
+    """
+
+    def __init__(self, connection):
+        self._conn = connection
+        self._lock = threading.Lock()
+
+    def execute(self, sql, params=()):
+        with self._lock:
+            with self._conn.cursor() as cur:
+                cur.execute(sql.replace("?", "%s"), params)
+
+    def executemany(self, sql, seq_of_params):
+        with self._lock:
+            with self._conn.cursor() as cur:
+                cur.executemany(sql.replace("?", "%s"), seq_of_params)
+
+    def close(self):
+        self._conn.close()
+
+
+def init_mysql_table(db):
+    """Create the telemetry table in MySQL and seed it with the same rows
+    the SQLite database is initialized with (existing rows are kept)."""
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS telemetry ("
+        "`Label` VARCHAR(255) PRIMARY KEY, `Timestamp` TEXT, "
+        "`Value` TEXT, `ID` VARCHAR(255), `dbID` INT)"
+    )
+    from database_initialize import telemetry_data
+    db.executemany("INSERT IGNORE INTO telemetry VALUES(?, ?, ?, ?, ?)",
+                   telemetry_data)
+    log_info(f"MySQL telemetry table ready ({len(telemetry_data)} seed rows)")
+
+
+def open_database():
+    """Open the telemetry database.
+
+    If config.ini has a [mysql] section with ``enabled = true``, telemetry
+    is written to MySQL. Otherwise the original local SQLite database is
+    used and behaviour is unchanged.
+    """
+    config = configparser.ConfigParser()
+    config.read(CONFIG_PATH)
+    if config.getboolean("mysql", "enabled", fallback=False):
+        import pymysql
+        conn = pymysql.connect(
+            host=config.get("mysql", "host", fallback="127.0.0.1"),
+            port=config.getint("mysql", "port", fallback=3306),
+            user=config.get("mysql", "user", fallback="mimic"),
+            password=config.get("mysql", "password", fallback=""),
+            database=config.get("mysql", "database", fallback="mimic"),
+            autocommit=True,
+            charset="utf8mb4",
+        )
+        db = MySQLTelemetryDB(conn)
+        init_mysql_table(db)
+        log_info("Telemetry database: MySQL "
+                 f"{config.get('mysql', 'host', fallback='127.0.0.1')}/"
+                 f"{config.get('mysql', 'database', fallback='mimic')}")
+        return db
+
+    db_path = pathlib.Path('/dev/shm/iss_telemetry.db')
+    if not db_path.exists():
+        db_path = pathlib.Path.home() / '.mimic_data' / 'iss_telemetry.db'
+    return sqlite3.connect(str(db_path), isolation_level=None,
+                           check_same_thread=False)
 
 class LSSubscriptionListener:
     """Though SubscriptionListener appears to be in the library,
@@ -55,7 +136,7 @@ class LSSubscriptionListener:
         pass
 
 class StatusUpdater:  # extend lightstreamer_client.ClientListener? or custom?
-    def __init__(self, db: sqlite3.Connection):
+    def __init__(self, db):
         self.db = db
 
     def onStatusChange(self, newStatus):
@@ -64,7 +145,7 @@ class StatusUpdater:  # extend lightstreamer_client.ClientListener? or custom?
 
 
 class MainListener(LSSubscriptionListener):
-    def __init__(self, db: sqlite3.Connection):
+    def __init__(self, db):
         super().__init__()
         self.db = db
 
@@ -82,7 +163,7 @@ class MainListener(LSSubscriptionListener):
 
 
 class TimeListener(LSSubscriptionListener):
-    def __init__(self, db: sqlite3.Connection):
+    def __init__(self, db):
         super().__init__()
         self.db = db
         self.AOSnum = 0
@@ -136,13 +217,7 @@ def main():
                             items=["TIME_000001"],
                             fields=["TimeStamp", "Value", "Status.Class", "Status.Indicator"])
 
-    # Cross-platform database path handling
-    import pathlib
-    db_path = pathlib.Path('/dev/shm/iss_telemetry.db')
-    if not db_path.exists():
-        db_path = pathlib.Path.home() / '.mimic_data' / 'iss_telemetry.db'
-    
-    db = sqlite3.connect(str(db_path), isolation_level=None, check_same_thread=False)
+    db = open_database()
     main_sub.addListener(MainListener(db))
     time_sub.addListener(TimeListener(db))
 
