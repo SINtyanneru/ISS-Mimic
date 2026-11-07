@@ -29,16 +29,66 @@ class MySQLTelemetryDB:
     placeholders to PyMySQL's ``%s`` so the listener code stays unchanged.
     A lock serializes access because PyMySQL connections are not safe to
     share between the Lightstreamer callback threads.
+
+    In addition, every value update is appended to the
+    ``telemetry_history`` table so the most recent ``history_per_label``
+    values of each Label stay available in MySQL (0 disables history).
     """
 
-    def __init__(self, connection):
+    def __init__(self, connection, history_per_label=100):
         self._conn = connection
         self._lock = threading.Lock()
+        self._history_per_label = history_per_label
+        self._label_by_id = {}
 
     def execute(self, sql, params=()):
         with self._lock:
             with self._conn.cursor() as cur:
                 cur.execute(sql.replace("?", "%s"), params)
+            self._record_history(sql, params)
+
+    def _label_for_id(self, item_id):
+        """Resolve the telemetry Label for a Lightstreamer item ID."""
+        if item_id not in self._label_by_id:
+            with self._conn.cursor() as cur:
+                cur.execute("SELECT `Label` FROM telemetry WHERE `ID` = %s",
+                            (item_id,))
+                row = cur.fetchone()
+            self._label_by_id[item_id] = row[0] if row else None
+        return self._label_by_id[item_id]
+
+    def _record_history(self, sql, params):
+        """Append a value update to telemetry_history and prune old rows.
+
+        Only the listeners' value updates (``UPDATE telemetry SET Value
+        ...``) are recorded. The caller must hold ``self._lock``. Existing
+        tables and rows are never modified or deleted here, except for the
+        history rows beyond the newest ``history_per_label`` per Label.
+        """
+        if self._history_per_label <= 0 or not params:
+            return
+        normalized = " ".join(sql.split())
+        if not normalized.startswith("UPDATE telemetry SET Value"):
+            return
+        value = params[0]
+        timestamp = params[1] if "Timestamp = ?" in normalized else None
+        if normalized.endswith("WHERE ID = ?"):
+            label = self._label_for_id(params[-1])
+        elif normalized.endswith("WHERE Label = ?"):
+            label = params[-1]
+        else:
+            return
+        if label is None:
+            return
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO telemetry_history (`Label`, `Timestamp`, `Value`) "
+                "VALUES (%s, %s, %s)", (label, timestamp, value))
+            cur.execute(
+                "DELETE FROM telemetry_history WHERE `Label` = %s AND `seq` NOT IN "
+                "(SELECT `seq` FROM (SELECT `seq` FROM telemetry_history "
+                "WHERE `Label` = %s ORDER BY `seq` DESC LIMIT %s) AS keep_rows)",
+                (label, label, self._history_per_label))
 
     def executemany(self, sql, seq_of_params):
         with self._lock:
@@ -50,12 +100,19 @@ class MySQLTelemetryDB:
 
 
 def init_mysql_table(db):
-    """Create the telemetry table in MySQL and seed it with the same rows
-    the SQLite database is initialized with (existing rows are kept)."""
+    """Create the telemetry tables in MySQL and seed the telemetry table
+    with the same rows the SQLite database is initialized with (existing
+    tables and rows are kept; nothing is dropped or truncated)."""
     db.execute(
         "CREATE TABLE IF NOT EXISTS telemetry ("
         "`Label` VARCHAR(255) PRIMARY KEY, `Timestamp` TEXT, "
         "`Value` TEXT, `ID` VARCHAR(255), `dbID` INT)"
+    )
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS telemetry_history ("
+        "`seq` BIGINT NOT NULL AUTO_INCREMENT, "
+        "`Label` VARCHAR(255) NOT NULL, `Timestamp` TEXT, `Value` TEXT, "
+        "PRIMARY KEY (`seq`), KEY `idx_label_seq` (`Label`, `seq`))"
     )
     from database_initialize import telemetry_data
     db.executemany("INSERT IGNORE INTO telemetry VALUES(?, ?, ?, ?, ?)",
@@ -83,7 +140,10 @@ def open_database():
             autocommit=True,
             charset="utf8mb4",
         )
-        db = MySQLTelemetryDB(conn)
+        db = MySQLTelemetryDB(
+            conn,
+            history_per_label=config.getint("mysql", "history_per_label",
+                                            fallback=100))
         init_mysql_table(db)
         log_info("Telemetry database: MySQL "
                  f"{config.get('mysql', 'host', fallback='127.0.0.1')}/"
