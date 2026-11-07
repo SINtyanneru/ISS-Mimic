@@ -33,19 +33,90 @@ class MySQLTelemetryDB:
     In addition, every value update is appended to the
     ``telemetry_history`` table so the most recent ``history_per_label``
     values of each Label stay available in MySQL (0 disables history).
+
+    Value updates are NOT written on the caller's thread. The Lightstreamer
+    listeners run on the client's single event thread, so a blocking
+    database write there delays every following update and lets the
+    client's internal queue (and with it, memory usage) grow whenever the
+    database cannot keep up. Instead, ``execute`` only keeps the newest
+    pending update per telemetry row in a small buffer, and a dedicated
+    writer thread performs the actual writes. While the database is busy,
+    stale values for the same row are overwritten in the buffer before
+    they are ever written, so the write load shrinks instead of piling up.
+    Other statements (e.g. the CREATE TABLE calls during setup) still run
+    synchronously on the caller's thread.
     """
+
+    # Run the history pruning DELETE only once per this many inserted
+    # history rows of the same Label. Between prunes a Label can hold up
+    # to history_per_label + PRUNE_EVERY - 1 rows.
+    PRUNE_EVERY = 20
 
     def __init__(self, connection, history_per_label=100):
         self._conn = connection
         self._lock = threading.Lock()
         self._history_per_label = history_per_label
         self._label_by_id = {}
+        self._prune_counter = {}
+        self._pending = {}
+        self._pending_cond = threading.Condition()
+        self._stop = threading.Event()
+        self._writer = threading.Thread(target=self._writer_loop,
+                                        name="MySQLTelemetryWriter",
+                                        daemon=True)
+        self._writer.start()
+
+    @staticmethod
+    def _update_key(sql, params):
+        """Buffer key for a telemetry value update, or None.
+
+        Only the listeners' value updates (``UPDATE telemetry SET Value
+        ... WHERE ID = ?`` / ``... WHERE Label = ?``) are buffered; the
+        key identifies the target row so a newer update replaces a still
+        pending older one for the same row.
+        """
+        if not params:
+            return None
+        normalized = " ".join(sql.split())
+        if not normalized.startswith("UPDATE telemetry SET Value"):
+            return None
+        if normalized.endswith("WHERE ID = ?"):
+            return ("ID", params[-1])
+        if normalized.endswith("WHERE Label = ?"):
+            return ("Label", params[-1])
+        return None
 
     def execute(self, sql, params=()):
+        key = self._update_key(sql, params)
+        if key is None:
+            self._execute_now(sql, params)
+            return
+        with self._pending_cond:
+            self._pending[key] = (sql, params)
+            self._pending_cond.notify()
+
+    def _execute_now(self, sql, params=()):
         with self._lock:
             with self._conn.cursor() as cur:
                 cur.execute(sql.replace("?", "%s"), params)
             self._record_history(sql, params)
+
+    def _writer_loop(self):
+        while True:
+            with self._pending_cond:
+                while not self._pending and not self._stop.is_set():
+                    self._pending_cond.wait(timeout=1.0)
+                batch = self._pending
+                self._pending = {}
+            if not batch:
+                if self._stop.is_set():
+                    return
+                continue
+            for sql, params in batch.values():
+                try:
+                    self._execute_now(sql, params)
+                except Exception as ex:
+                    log_error(f"MySQL telemetry write failed: {ex}")
 
     def _label_for_id(self, item_id):
         """Resolve the telemetry Label for a Lightstreamer item ID."""
@@ -84,11 +155,19 @@ class MySQLTelemetryDB:
             cur.execute(
                 "INSERT INTO telemetry_history (`Label`, `Timestamp`, `Value`) "
                 "VALUES (%s, %s, %s)", (label, timestamp, value))
-            cur.execute(
-                "DELETE FROM telemetry_history WHERE `Label` = %s AND `seq` NOT IN "
-                "(SELECT `seq` FROM (SELECT `seq` FROM telemetry_history "
-                "WHERE `Label` = %s ORDER BY `seq` DESC LIMIT %s) AS keep_rows)",
-                (label, label, self._history_per_label))
+            # The pruning DELETE is the most expensive statement of the
+            # three issued per update, so it only runs every PRUNE_EVERY
+            # inserted rows of this Label instead of on every update.
+            count = self._prune_counter.get(label, 0) + 1
+            if count >= self.PRUNE_EVERY:
+                self._prune_counter[label] = 0
+                cur.execute(
+                    "DELETE FROM telemetry_history WHERE `Label` = %s AND `seq` NOT IN "
+                    "(SELECT `seq` FROM (SELECT `seq` FROM telemetry_history "
+                    "WHERE `Label` = %s ORDER BY `seq` DESC LIMIT %s) AS keep_rows)",
+                    (label, label, self._history_per_label))
+            else:
+                self._prune_counter[label] = count
 
     def executemany(self, sql, seq_of_params):
         with self._lock:
@@ -96,6 +175,11 @@ class MySQLTelemetryDB:
                 cur.executemany(sql.replace("?", "%s"), seq_of_params)
 
     def close(self):
+        # Flush the updates that are still buffered, then close.
+        self._stop.set()
+        with self._pending_cond:
+            self._pending_cond.notify_all()
+        self._writer.join(timeout=30)
         self._conn.close()
 
 
@@ -274,7 +358,10 @@ def main():
     #LightstreamerClient.setLoggerProvider(loggerProvider)
 
     ls_client = LightstreamerClient("https://push.lightstreamer.com", "ISSLIVE")
-    ls_client.connectionOptions.setSlowingEnabled(False)
+    # Keep the slowing protection enabled: if this client cannot keep up
+    # with the stream, the client falls back to polling and the server
+    # merges obsolete updates instead of the client queueing them all.
+    ls_client.connectionOptions.setSlowingEnabled(True)
 
     main_sub = Subscription(mode="MERGE",
                             items=IDENTIFIERS,
